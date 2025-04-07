@@ -1,6 +1,6 @@
 <h1 align="center">
 	<a href="https://hlmqz.github.io/map-grid-density-demo/">
-		<img height="240" src="https://github.com/hlmqz/php-http/blob/master/img/map-grid-density-rectangle.webp"/>
+		<img height="240" src="https://github.com/hlmqz/php-http/blob/master/img/php-84-http-requests.png"/>
 	</a>
 </h1>
 
