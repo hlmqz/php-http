@@ -27,9 +27,8 @@ class Requester
 	];
 
 	protected(set) Object|array $last = [];
+	protected ?object $curl;
 	protected array $urlinfo = [];
-	public array $headers = [];
-	public object|array $data = [];
 
 //-----------------------------------------------------------------------------------
 
@@ -109,7 +108,12 @@ class Requester
 
 //===================================================================================
 
-	function __construct(string $url, string $method = 'GET')
+	function __construct(
+			string $url='',
+			string $method = 'GET',
+			public object|array $data = [],
+			public array $headers = [],
+		)
 	{
 		$this->method = $method;
 		$this->url = $url;
@@ -226,49 +230,54 @@ class Requester
 	}
 
 //===================================================================================
+
+protected function generateCurl()
+{
+	$this->last = $this->prepare();
+	$this->curl = curl_init($this->last['fullurl']);
+
+	curl_setopt($this->curl, CURLOPT_CUSTOMREQUEST, $this->last['method']);
+	curl_setopt($this->curl, CURLOPT_HTTPHEADER, $this->last['headers']);
+	curl_setopt($this->curl, CURLOPT_RETURNTRANSFER, true);
+	curl_setopt($this->curl, CURLOPT_TIMEOUT, $this->timeLimit);
+	curl_setopt($this->curl, CURLOPT_SSL_VERIFYHOST, 0);
+	curl_setopt($this->curl, CURLOPT_SSL_VERIFYPEER, 0);
+	curl_setopt($this->curl, CURLOPT_HEADER, true);
+
+	if(in_array($this->last['method'], ['POST','PUT','PATCH',]))
+	{
+		curl_setopt($this->curl, CURLOPT_POST, true);
+
+		if($this->last['data'])
+		{
+			curl_setopt($this->curl, CURLOPT_POSTFIELDS, $this->last['data']);
+		}
+	}
+
+	return $this->curl;
+}
+
+//===================================================================================
 // *************************** PUBLIC METHODS ****************************
 //===================================================================================
 
 	public function send($toArray = false): Responded
 	{
-		$prepared = $this->prepare();
+		if(!($this->curl ?? false))
+			$this->generateCurl();
 
-		$this->last = $prepared;
-
-		set_time_limit($this->timeLimit);
-
-		$curl = curl_init($prepared['fullurl']);
-
-		curl_setopt($curl, CURLOPT_CUSTOMREQUEST, $prepared['method']);
-		curl_setopt($curl, CURLOPT_HTTPHEADER, $prepared['headers']);
-		curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
-		curl_setopt($curl, CURLOPT_TIMEOUT, $this->timeLimit);
-		curl_setopt($curl, CURLOPT_SSL_VERIFYHOST, 0);
-		curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 0);
-		curl_setopt($curl, CURLOPT_HEADER, true);
-
-		if(in_array($prepared['method'], ['POST','PUT','PATCH',]))
-		{
-			curl_setopt($curl, CURLOPT_POST, true);
-
-			if($prepared['data'])
-			{
-				curl_setopt($curl, CURLOPT_POSTFIELDS, $prepared['data']);
-			}
-		}
-
-		$response = curl_exec($curl);
+		$response = curl_exec($this->curl);
 
 		$headers = [];
 		$content = null;
 
 		if($response === false)
 		{
-			$this->last['error'] = curl_error($curl);
+			$this->last['error'] = curl_error($this->curl);
 		}
 		else
 		{
-			$header_size = curl_getinfo($curl, CURLINFO_HEADER_SIZE);
+			$header_size = curl_getinfo($this->curl, CURLINFO_HEADER_SIZE);
 
 			$rawheaders = explode("\n", trim(substr($response, 0, $header_size)));
 			$content = trim(substr($response, $header_size));
@@ -281,10 +290,11 @@ class Requester
 			}
 		}
 
-		$this->last['curl_info'] = curl_getinfo($curl);
+		$this->last['curl_info'] = curl_getinfo($this->curl);
 
-		curl_reset($curl);
-		curl_close($curl);
+		curl_reset($this->curl);
+		curl_close($this->curl);
+		$this->curl = null;
 
 		$this->last['content'] = $content;
 		$this->last['content_json'] = $content ? json_decode($content, $toArray) : [];
@@ -292,12 +302,12 @@ class Requester
 		return new Responded(
 			httpCode: $this->last['curl_info']['http_code'] ?? 0,
 			contentType: $this->last['curl_info']['content_type'] ?? '',
-			url: $prepared['fullurl'],
-			method: $prepared['method'],
+			url: $this->last['fullurl'],
+			method: $this->last['method'],
 			headers: $headers,
 			content: $this->last['content_json'] ?? $this->last['content'] ?? [],
 			error: $this->last['error'] ?? null,
-			rawData: $prepared['rawdata'],
+			rawData: $this->last['rawdata'],
 			curlInfo: $this->last['curl_info'],
 		);
 	}
