@@ -8,7 +8,7 @@ class RequestTest extends TestCase
 {
 	public function testRequester()
 	{
-		$requester = new Requester('https://jsonplaceholder.typicode.com/posts/1');
+		$requester = new Requester('https://httpbin.org/get');
 		$responded = $requester->send();
 
 		$this->assertTrue(is_a($responded, Responded::class));
