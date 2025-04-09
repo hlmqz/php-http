@@ -26,9 +26,13 @@ class Requester
 		'urlencoded' => 'application/x-www-form-urlencoded',
 	];
 
-	protected(set) Object|array $last = [];
-	protected ?object $curl;
+	protected(set) string $id;
+	protected(set) Responded $responded;
+	protected(set) object|array $last = [];
+	protected ?object $curl = null;
 	protected array $urlinfo = [];
+	protected array $multiple = [];
+	protected mixed $response = null;
 
 //-----------------------------------------------------------------------------------
 
@@ -115,6 +119,8 @@ class Requester
 			public array $headers = [],
 		)
 	{
+		$this->id = bin2hex(random_bytes(16));
+		$responded = new Responded();
 		$this->method = $method;
 		$this->url = $url;
 	}
@@ -142,13 +148,11 @@ class Requester
 
 		$heads = [];
 
-		// se establece el header para el tipo de datos enviados
 		$heads['content-type'] = [
 			'header' => 'Content-Type',
 			'value' => $this->types[$this->type],
 		];
 
-		// preparar headers, para ser manejables posteriormente
 		foreach ($this->headers as $k => $v)
 		{
 			if(!(is_array($v) || is_object($v)))
@@ -175,7 +179,6 @@ class Requester
 		{
 			$headers[] = "{$head['header']}:{$head['value']}";
 		}
-		// se define toda la url base sin datos de query.
 
 		$url = "{$this->urlinfo['scheme']}://{$this->urlinfo['host']}";
 		$url .= "{$this->urlinfo['colon']}{$this->urlinfo['port']}{$this->urlinfo['path']}";
@@ -219,6 +222,7 @@ class Requester
 
 		return [
 			'url' => $url,
+			'urlinfo' => $this->urlinfo,
 			'fullurl' => $url.($query ? "?{$query}" : ''),
 			'method' => $this->method,
 			'rawdata' => $this->data,
@@ -258,58 +262,110 @@ protected function generateCurl()
 }
 
 //===================================================================================
+
+protected function processCurlResponse($toArray = false): ?Responded
+{
+	if(!$this->curl)
+		return null;
+
+	$headers = [];
+	$content = null;
+
+	if($this->response === false)
+	{
+		$this->last['error'] = curl_error($this->curl);
+	}
+	else
+	{
+		$header_size = curl_getinfo($this->curl, CURLINFO_HEADER_SIZE);
+
+		$rawheaders = explode("\n", trim(substr($this->response, 0, $header_size)));
+		$content = trim(substr($this->response, $header_size));
+
+		foreach ($rawheaders as $line)
+		{
+			$head = $this->splitHeader($line);
+			if($head)
+				$headers[strtolower($head['header'])] = $head['value'];
+		}
+	}
+
+	$this->last['curl_info'] = curl_getinfo($this->curl);
+
+	$this->last['content'] = $content;
+	$this->last['content_json'] = $content ? json_decode($content, $toArray) : [];
+
+	curl_reset($this->curl);
+	curl_close($this->curl);
+	$this->curl = null;
+
+	$this->responded = new Responded(
+		httpCode: $this->last['curl_info']['http_code'] ?? 0,
+		contentType: $this->last['curl_info']['content_type'] ?? '',
+		url: $this->last['fullurl'],
+		urlInfo: $this->last['urlinfo'],
+		method: $this->last['method'],
+		headers: $headers,
+		content: $this->last['content_json'] ?? $this->last['content'] ?? [],
+		error: $this->last['error'] ?? null,
+		dataSended: $this->last['rawdata'],
+		curlInfo: $this->last['curl_info'],
+	);
+
+	return $this->responded;
+}
+
+//===================================================================================
 // *************************** PUBLIC METHODS ****************************
+//===================================================================================
+
+public function addMultiple(Requester $requester): string
+{
+	$this->multiple[$requester->id] = $requester;
+	return $requester->id;
+}
+
+//===================================================================================
+
+public function sendMultiple($toArray = false): array
+{
+	$multiHandler = curl_multi_init();
+
+	foreach ($this->multiple as $requester)
+		curl_multi_add_handle($multiHandler, $requester->generateCurl());
+
+	do {
+
+		$status = curl_multi_exec($multiHandler, $running);
+
+		if ($running)
+			curl_multi_select($multiHandler);
+
+	} while ($running && $status === CURLM_OK);
+
+	$responded = [];
+
+	foreach ($this->multiple as $requester)
+	{
+		$requester->response = curl_multi_getcontent($requester->curl);
+
+		curl_multi_remove_handle($multiHandler, $requester->curl);
+		$responded[$requester->id] = $requester->processCurlResponse($toArray);
+	}
+
+	return $responded;
+}
+
 //===================================================================================
 
 	public function send($toArray = false): Responded
 	{
-		if(!($this->curl ?? false))
+		if(!$this->curl)
 			$this->generateCurl();
 
-		$response = curl_exec($this->curl);
+		$this->response = curl_exec($this->curl);
 
-		$headers = [];
-		$content = null;
-
-		if($response === false)
-		{
-			$this->last['error'] = curl_error($this->curl);
-		}
-		else
-		{
-			$header_size = curl_getinfo($this->curl, CURLINFO_HEADER_SIZE);
-
-			$rawheaders = explode("\n", trim(substr($response, 0, $header_size)));
-			$content = trim(substr($response, $header_size));
-
-			foreach ($rawheaders as $line)
-			{
-				$head = $this->splitHeader($line);
-				if($head)
-					$headers[strtolower($head['header'])] = $head['value'];
-			}
-		}
-
-		$this->last['curl_info'] = curl_getinfo($this->curl);
-
-		curl_reset($this->curl);
-		curl_close($this->curl);
-		$this->curl = null;
-
-		$this->last['content'] = $content;
-		$this->last['content_json'] = $content ? json_decode($content, $toArray) : [];
-
-		return new Responded(
-			httpCode: $this->last['curl_info']['http_code'] ?? 0,
-			contentType: $this->last['curl_info']['content_type'] ?? '',
-			url: $this->last['fullurl'],
-			method: $this->last['method'],
-			headers: $headers,
-			content: $this->last['content_json'] ?? $this->last['content'] ?? [],
-			error: $this->last['error'] ?? null,
-			rawData: $this->last['rawdata'],
-			curlInfo: $this->last['curl_info'],
-		);
+		return $this->processCurlResponse($toArray);
 	}
 
 //===================================================================================
